@@ -1,0 +1,488 @@
+---
+title: "Projekt VAR"
+author: "Ewelina Nieć"
+date: "2024-03-25"
+output: 
+  html_document:
+    code_folding: hide
+    theme: cerulean
+---
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+library(readr)
+library(dplyr)
+library(zoo)
+library(vars)
+library(bruceR)
+library(aTSA)
+```
+
+# Cel projektu {.tabset}
+
+Celem projektu jest stworzenie modelu VAR, stanowiącego bazę dla analizy przyczynowości w
+sensie Grangera celem uzyskania informacji jak poszczególne rynki wpływają na siebie (o ile wpływają).
+
+Badanie opiera się na danych, które zakresem obejmują dwa okresy:
+
+ - od stycznia 2016 roku do grudnia 2019 roku - okres przed COVID
+ 
+ - od stycznie 2020 roku do grudnia 2023 roku - okres i trakcie i po COVID
+
+Zbiór danych składa się z:
+
+• cen zamknięcia polskiej giełdy - WIG
+
+• cen zamknięcia ukraińskiej giełdy - WIG_Ukraina
+
+• cen zamknięcia czeskiej giełdy - PX
+
+• cen zamknięcia niemieckiej giełdy - DAX
+
+• cen ropy naftowej - ROPA
+
+• cen obligacji
+
+## Okres przed Covid {.active}
+
+### Przygotowanie danych
+
+**Wczytanie plików**
+
+```{r message=FALSE, warning=FALSE}
+# Polska
+WIG_przed <- read_csv("Dane/WIG_przed.csv")
+WIG_przed <- WIG_przed[,c(1,5)]
+colnames(WIG_przed) <- c('data','WIG_przed')
+
+ZLOTY_przed <- read_csv("Dane/ZLOTY_przed.csv")
+ZLOTY_przed <- ZLOTY_przed[,c(1,5)]
+colnames(ZLOTY_przed) <- c('data','ZLOTY_przed')
+
+# Ukraina
+WIG_ukraina_przed <- read_csv("Dane/WIG_ukraina_przed.csv")
+WIG_ukraina_przed <- WIG_ukraina_przed[,c(1,5)]
+colnames(WIG_ukraina_przed) <- c('data','WIG_ukraina_przed')
+
+HRYWNA_przed <- read_csv("Dane/HRYWNA_przed.csv")
+HRYWNA_przed <- HRYWNA_przed[,c(1,5)]
+HRYWNA_przed[,2] <- 1/HRYWNA_przed[,2]
+colnames(HRYWNA_przed) <- c('data','HRYWNA_przed')
+
+
+# Czechy
+PX_przed <- read_csv("Dane/PX_przed.csv")
+PX_przed <- PX_przed[,c(1,5)]
+colnames(PX_przed) <- c('data','PX_przed')
+
+KORONA_przed <- read_csv("Dane/KORONA_przed.csv")
+KORONA_przed <- KORONA_przed[,c(1,5)]
+colnames(KORONA_przed) <- c('data','KORONA_przed')
+
+
+# Niemcy
+DAX_przed <- read_csv("Dane/DAX_przed.csv")
+DAX_przed <- DAX_przed[,c(1,5)]
+colnames(DAX_przed) <- c('data','DAX_przed')
+
+EURO_przed <- read_csv("Dane/EURO_przed.csv")
+EURO_przed <- EURO_przed[,c(1,5)]
+colnames(EURO_przed) <- c('data','EURO_przed')
+
+
+# ropa
+ROPA_przed <- read_delim("C:/Users/eweli/OneDrive/Desktop/AW/projekt2/dane/ROPA_przed.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+ROPA_przed <- ROPA_przed[,c(1,5)]
+colnames(ROPA_przed) <- c('data','ROPA_przed')
+
+# obligacje
+obligacje_przed <- read_csv("Dane/obligacje_przed.csv")
+obligacje_przed <- obligacje_przed[,c(1,5)]
+colnames(obligacje_przed) <- c('data','obligacje_przed')
+```
+
+**Przewalutowanie na dolary**
+
+```{r}
+# POLSKA - WIG PLN na USD
+df <- merge(x=WIG_przed,y=ZLOTY_przed, 
+          by="data", all.x=TRUE)
+WIG_przed_USD <- data.frame("data" = df[1], df[2]*df[3])
+rm(df,WIG_przed)
+
+# UKRAINA - WIG Ukraina UAH na USD
+df <- merge(x=WIG_ukraina_przed,y=HRYWNA_przed, 
+          by="data", all.x=TRUE)
+WIG_ukraina_przed_USD <- data.frame("data" = df[1], df[2]*df[3])
+rm(df,WIG_ukraina_przed,HRYWNA_przed)
+
+# Czechy PX CZK na USD
+df <- merge(x=PX_przed,y=KORONA_przed, 
+          by="data", all.x=TRUE)
+PX_przed_USD <- data.frame("data" = df[1], df[2]*df[3])
+rm(df,PX_przed,KORONA_przed)
+
+# Niemcy DAX EUR na USD
+df <- merge(x=DAX_przed,y=EURO_przed, 
+          by="data", all.x=TRUE)
+DAX_przed_USD <- data.frame("data" = df[1], df[2]*df[3])
+rm(df,DAX_przed,EURO_przed)
+
+# Ropa
+ROPA_przed <- ROPA_przed[complete.cases(ROPA_przed),]
+ROPA_przed$data <- as.Date(ROPA_przed$data, format = "%d.%m.%Y")
+
+# Obligacje PLN na USD
+df <- merge(x=obligacje_przed,y=ZLOTY_przed, 
+          by="data", all.x=TRUE)
+obligacje_przed_USD <- data.frame("data" = df[1], df[2]*df[3])
+rm(df,obligacje_przed,ZLOTY_przed)
+```
+
+**Łączenie wszystkich tabel w jedną**
+
+```{r}
+# przed
+df_przed <- WIG_przed_USD %>% full_join(WIG_ukraina_przed_USD, by = "data")
+df_przed <- df_przed %>% full_join(PX_przed_USD, by = "data")
+df_przed <- df_przed %>% full_join(DAX_przed_USD, by = "data")
+df_przed <- df_przed %>% full_join(ROPA_przed, by = "data")
+df_przed <- df_przed %>% full_join(obligacje_przed_USD, by = "data")
+
+rm(WIG_przed_USD, WIG_ukraina_przed_USD, PX_przed_USD, DAX_przed_USD, ROPA_przed, obligacje_przed_USD)
+```
+
+**Interpolacja liniowa**
+
+Pnieważ jest dużo braków, to interpolacja liniowa nie zawsze sobie z nimi radzi, dlatego po zastosowaniu interpolacji musimy usunąć 2 wiersze w danych przed COVID W przypadku danych po 2020 roku musimy usunąć 1 wiersz.
+
+```{r , warning=FALSE}
+# przed
+# sortowanie danych wzgledem daty
+df_przed <- df_przed[order(df_przed$data), ]
+
+df_przed_interpolacja <- data.frame("data" = df_przed$data, 
+                                    "WIG" = na.approx(df_przed$WIG_przed, na.rm = FALSE),
+                                    "WIG_Ukraina" = na.approx(df_przed$WIG_ukraina_przed, 
+                                                              na.rm = FALSE),
+                                    "PX" = na.approx(df_przed$PX_przed, na.rm = FALSE),
+                                    "DAX" = na.approx(df_przed$DAX_przed, na.rm = FALSE),
+                                    "ROPA" = na.approx(df_przed$ROPA_przed, na.rm = FALSE),
+                                    "obligacje" = na.approx(df_przed$obligacje_przed, na.rm = FALSE))
+
+df_przed_interpolacja <- na.omit(df_przed_interpolacja)
+```
+
+**Prezentacja fragmentu gotowych danych:**
+```{r}
+# przed
+knitr::kable(head(df_przed_interpolacja), "simple", align ='llll')
+```
+
+**Graficzna prezentacja wyników:**
+```{r}
+plot(x = df_przed_interpolacja[,1], y = df_przed_interpolacja[,2], ylim = range(0:20000), type="l", xlab="data",ylab="USD") # WIG
+lines(x = df_przed_interpolacja[,1], y=df_przed_interpolacja[,5], col = "green") # DAX
+legend("topright", legend = c("WIG", "DAX"), col = c("black", "green"), lty = c(1, 1), cex = 0.8)
+
+plot(x = df_przed_interpolacja[,1], y=df_przed_interpolacja[,3], col = "pink", ylim = range(0:150), type="l", xlab="data",ylab="USD") # WIG Ukraina
+lines(x = df_przed_interpolacja[,1], y=df_przed_interpolacja[,4], col = "blue") # PX
+lines(x = df_przed_interpolacja[,1], y=df_przed_interpolacja[,6], col = "yellow") # Ropa
+lines(x = df_przed_interpolacja[,1], y=df_przed_interpolacja[,7], col = "red") # Obligacje
+legend("topright", legend = c("WIG Ukraina", "PX", "Ropa", "Obligacje"), col = c("pink", "blue", "yellow", "red"), lty = c(1, 1, 1, 1), cex = 0.8)
+```
+
+**Obliczenie stóp zwrotu**
+
+```{r}
+# przed
+stopa_zwrotu_przed <- data.frame(matrix(0, nrow = nrow(df_przed_interpolacja), 
+                                        ncol = ncol(df_przed_interpolacja)))
+
+stopa_zwrotu_przed[, 1] <- df_przed_interpolacja[, 1]
+
+for (j in 2:ncol(stopa_zwrotu_przed)){
+  for (i in 2:nrow(stopa_zwrotu_przed))
+  {
+  stopa_zwrotu_przed[i, j] <- 
+    (df_przed_interpolacja[i, j] - df_przed_interpolacja[i-1, j])/df_przed_interpolacja[i-1, j]
+  }
+}
+stopa_zwrotu_przed <- stopa_zwrotu_przed[-1, ]
+names(stopa_zwrotu_przed) <- names(df_przed_interpolacja)
+rownames(stopa_zwrotu_przed) <- NULL    
+```
+
+### Test stacjonarności
+
+W celu sprawdzenia stacjonarności danych został przeprowadzony test Dickey’a-Fullera adf.test(), którego hipotezy przedstawiają się w sposób następujący:
+
+*H0 : szereg jest niestacjonarny*
+
+*H1 : szereg jest stacjonarny*
+
+```{r}
+# przed
+adf.test(stopa_zwrotu_przed$WIG)
+adf.test(stopa_zwrotu_przed$WIG_Ukraina)
+adf.test(stopa_zwrotu_przed$PX)
+adf.test(stopa_zwrotu_przed$DAX)
+adf.test(stopa_zwrotu_przed$ROPA)
+```
+
+p.value wszędzie wynosi wynosi 0.01, czyli nie przekracza 5%, zatem odrzucamy hioptezę H0. Oznacza to, że stopy zwrotu są stacjonarne.
+
+### Model VAR
+Model wektorowej autoregresji podobnie jak w przypadku modeli AR nie posiada podziału na zmienne egzogeniczne oraz endogeniczne. Dzieje się tak, gdyż każda zmienna uwzględniona w modelu ma wpływ na pozostałe zmienne, a proces modelowania dotyczy każdej zmiennej.
+
+#### Opóźnienie
+
+Chcąc stworzyć model VAR należy wybrać rząd jego opóźnień.
+
+```{r, warning=FALSE}
+# przed
+VARselect(as.matrix(stopa_zwrotu_przed[,-1]))
+```
+
+Wszystkie kryteria wskazują na wybór modelu z 1 opóźnieniem
+Wybrano opóźnienie 1
+
+#### Budowanie modelu VAR
+
+```{r}
+# przed
+model_przed <- VAR(stopa_zwrotu_przed[,-1], p = 1)
+summary(model_przed)
+```
+
+
+### Weryfikacja modelu
+
+#### Przyczynowość w sensie Grangera
+
+```{r, warning=FALSE}
+# przed
+granger_causality(model_przed)
+```
+
+
+## Okres po Covid
+
+### Przygotowanie danych
+
+**Wczytanie plików**
+
+```{r message=FALSE, warning=FALSE}
+# Polska
+WIG_po <- read_csv("Dane/WIG_po.csv")
+WIG_po <- WIG_po[,c(1,5)]
+colnames(WIG_po) <- c('data','WIG_po')
+
+ZLOTY_po <- read_csv("Dane/ZLOTY_po.csv")
+ZLOTY_po <- ZLOTY_po[,c(1,5)] 
+colnames(ZLOTY_po) <- c('data','ZLOTY_po')
+
+# Ukraina
+WIG_ukraina_po <- read_csv("Dane/WIG_ukraina_po.csv")
+WIG_ukraina_po <- WIG_ukraina_po[,c(1,5)]
+colnames(WIG_ukraina_po) <- c('data','WIG_ukraina_po')
+
+HRYWNA_po <- read_csv("Dane/HRYWNA_po.csv")
+HRYWNA_po <- HRYWNA_po[,c(1,5)]
+HRYWNA_po[,2] <- 1/HRYWNA_po[,2]
+colnames(HRYWNA_po) <- c('data','HRYWNA_po')
+
+# Czechy
+PX_po <- read_csv("Dane/PX_po.csv")
+PX_po <- PX_po[,c(1,5)]
+colnames(PX_po) <- c('data','PX_po')
+
+KORONA_po <- read_csv("Dane/KORONA_po.csv")
+KORONA_po <- KORONA_po[,c(1,5)]
+colnames(KORONA_po) <- c('data','KORONA_po')
+
+# Niemcy
+DAX_po <- read_csv("Dane/DAX_po.csv")
+DAX_po <- DAX_po[,c(1,5)]
+colnames(DAX_po) <- c('data','DAX_po')
+
+EURO_po <- read_csv("Dane/EURO_po.csv")
+EURO_po <- EURO_po[,c(1,5)]
+colnames(EURO_po) <- c('data','EURO_po')
+
+# ropa
+ROPA_po <- read_delim("C:/Users/eweli/OneDrive/Desktop/AW/projekt2/dane/ROPA_po.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+ROPA_po <- ROPA_po[,c(1,5)]
+colnames(ROPA_po) <- c('data','ROPA_po')
+
+# obligacje
+obligacje_po <- read_csv("Dane/obligacje_po.csv")
+obligacje_po <- obligacje_po[,c(1,5)]
+colnames(obligacje_po) <- c('data','obligacje_po')
+```
+
+**Przewalutowanie na dolary**
+
+```{r}
+# POLSKA - WIG PLN na USD
+df <- merge(x=WIG_po,y=ZLOTY_po, 
+          by="data", all.x=TRUE)
+WIG_po_USD <- data.frame("data" = df[1], df[2]*df[3])
+rm(df,WIG_po)
+
+# UKRAINA - WIG Ukraina UAH na USD
+df <- merge(x=WIG_ukraina_po,y=HRYWNA_po, 
+          by="data", all.x=TRUE)
+WIG_ukraina_po_USD <- data.frame("data" = df[1], df[2]*df[3])
+rm(df,WIG_ukraina_po,HRYWNA_po)
+
+# Czechy PX CZK na USD
+df <- merge(x=PX_po,y=KORONA_po, 
+          by="data", all.x=TRUE)
+PX_po_USD <- data.frame("data" = df[1], df[2]*df[3])
+rm(df,PX_po,KORONA_po)
+
+# Niemcy DAX EUR na USD
+df <- merge(x=DAX_po,y=EURO_po, 
+          by="data", all.x=TRUE)
+DAX_po_USD <- data.frame("data" = df[1], df[2]*df[3])
+rm(df,DAX_po,EURO_po)
+
+# Ropa
+ROPA_po$data <- as.Date(ROPA_po$data, format = "%d.%m.%Y")
+
+# Obligacje PLN na USD
+df <- merge(x=obligacje_po,y=ZLOTY_po, 
+          by="data", all.x=TRUE)
+obligacje_po_USD <- data.frame("data" = df[1], df[2]*df[3])
+rm(df,obligacje_po,ZLOTY_po)
+```
+
+**Łączenie wszystkich tabel w jedną**
+
+```{r}
+# po
+df_po <- WIG_po_USD %>% full_join(WIG_ukraina_po_USD, by = "data")
+df_po <- df_po %>% full_join(PX_po_USD, by = "data")
+df_po <- df_po %>% full_join(DAX_po_USD, by = "data")
+df_po <- df_po %>% full_join(ROPA_po, by = "data")
+df_po <- df_po %>% full_join(obligacje_po_USD, by = "data")
+
+rm(WIG_po_USD, WIG_ukraina_po_USD, PX_po_USD, DAX_po_USD, ROPA_po, obligacje_po_USD)
+```
+
+**Interpolacja liniowa**
+
+Pnieważ jest dużo braków, to interpolacja liniowa nie zawsze sobie z nimi radzi, dlatego po zastosowaniu interpolacji musimy usunąć 2 wiersze w danych przed COVID W przypadku danych po 2020 roku musimy usunąć 1 wiersz.
+
+```{r , warning=FALSE}
+# po
+# sortowanie danych wzgledem daty
+df_po <- df_po[order(df_po$data), ]
+
+df_po_interpolacja <- data.frame("data" = df_po$data, 
+                                 "WIG" = na.approx(df_po$WIG_po, na.rm = FALSE),
+                                 "WIG_Ukraina" = na.approx(df_po$WIG_ukraina_po, 
+                                                           na.rm = FALSE),
+                                 "PX" = na.approx(df_po$PX_po, na.rm = FALSE),
+                                 "DAX" = na.approx(df_po$DAX_po, na.rm = FALSE),
+                                 "ROPA" = na.approx(df_po$ROPA_po, na.rm = FALSE),
+                                 "obligacje" = na.approx(df_po$obligacje_po, na.rm = FALSE))
+
+
+df_po_interpolacja <- na.omit(df_po_interpolacja)
+```
+
+**Prezentacja fragmentu gotowych danych:**
+```{r}
+# po
+knitr::kable(head(df_po_interpolacja), "simple", align ='llll')
+```
+
+**Graficzna prezentacja wyników:**
+```{r}
+plot(x = df_po_interpolacja[,1], y = df_po_interpolacja[,2], ylim = range(0:25000), type="l", xlab="data",ylab="USD") # WIG
+lines(x = df_po_interpolacja[,1], y=df_po_interpolacja[,5], col = "green") # DAX
+legend("topright", legend = c("WIG", "DAX"), col = c("black", "green"), lty = c(1, 1), cex = 0.8)
+
+plot(x = df_po_interpolacja[,1], y=df_po_interpolacja[,3], col = "pink", ylim = range(0:150), type="l", xlab="data",ylab="USD") # WIG Ukraina
+lines(x = df_po_interpolacja[,1], y=df_po_interpolacja[,4], col = "blue") # PX
+lines(x = df_po_interpolacja[,1], y=df_po_interpolacja[,6], col = "yellow") # Ropa
+lines(x = df_po_interpolacja[,1], y=df_po_interpolacja[,7], col = "red") # Obligacje
+legend("topright", legend = c("WIG Ukraina", "PX", "Ropa", "Obligacje"), col = c("pink", "blue", "yellow", "red"), lty = c(1, 1, 1, 1), cex = 0.8)
+```
+
+**Obliczenie stóp zwrotu**
+
+```{r}
+# po
+stopa_zwrotu_po <- data.frame(matrix(0, nrow = nrow(df_po_interpolacja), 
+                                        ncol = ncol(df_po_interpolacja)))
+
+stopa_zwrotu_po[, 1] <- df_po_interpolacja[, 1]
+
+for (j in 2:ncol(stopa_zwrotu_po)){
+  for (i in 2:nrow(stopa_zwrotu_po))
+  {
+  stopa_zwrotu_po[i, j] <- 
+    (df_po_interpolacja[i, j] - df_po_interpolacja[i-1, j])/df_po_interpolacja[i-1, j]
+  }
+}
+stopa_zwrotu_po <- stopa_zwrotu_po[-1, ]
+names(stopa_zwrotu_po) <- names(df_po_interpolacja)
+rownames(stopa_zwrotu_po) <- NULL 
+```
+
+### Test stacjonarności
+
+W celu sprawdzenia stacjonarności danych został przeprowadzony test Dickey’a-Fullera adf.test(), którego hipotezy przedstawiają się w sposób następujący:
+
+*H0 : szereg jest niestacjonarny*
+
+*H1 : szereg jest stacjonarny*
+
+```{r}
+# po
+adf.test(stopa_zwrotu_po$WIG)
+adf.test(stopa_zwrotu_po$WIG_Ukraina)
+adf.test(stopa_zwrotu_po$PX)
+adf.test(stopa_zwrotu_po$DAX)
+adf.test(stopa_zwrotu_po$ROPA)
+```
+
+p.value wszędzie wynosi wynosi 0.01, czyli nie przekracza 5%, zatem odrzucamy hioptezę H0. Oznacza to, że stopy zwrotu są stacjonarne.
+
+### Model VAR
+Model wektorowej autoregresji podobnie jak w przypadku modeli AR nie posiada podziału na zmienne egzogeniczne oraz endogeniczne. Dzieje się tak, gdyż każda zmienna uwzględniona w modelu ma wpływ na pozostałe zmienne, a proces modelowania dotyczy każdej zmiennej.
+
+#### Opóźnienie
+
+Chcąc stworzyć model VAR należy wybrać rząd jego opóźnień.
+
+```{r, warning=FALSE}
+# po
+VARselect(as.matrix(stopa_zwrotu_po[,-1]))
+```
+
+Kryterium AIC i FPE wskazuje na oóźnienie 8, natomiast HQ i SC na opóźnienie 1.
+Wybrano opóźnienie 1
+
+#### Budowanie modelu VAR
+
+```{r}
+# po
+model_po <- VAR(stopa_zwrotu_po[,-1], p = 1)
+summary(model_po)
+```
+
+
+### Weryfikacja modelu
+
+#### Przyczynowość w sensie Grangera
+
+```{r, warning=FALSE}
+# po
+granger_causality(model_po)
+```
+
